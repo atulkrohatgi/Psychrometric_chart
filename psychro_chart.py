@@ -172,10 +172,10 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             if w is not None and W_MIN <= w <= W_MAX:
                 xs.append(t); ys.append(w)
         if xs:
-            ax.plot(xs, ys, color="#4a90d9", lw=0.8, alpha=0.45)
+            ax.plot(xs, ys, color="#1a7dd4", lw=1.0, alpha=0.75)
             ax.text(xs[-1] + 0.4, ys[-1],
                     f"{int(round(rh*100))}%",
-                    fontsize=6.5, color="#2060a0", va="center", alpha=0.85)
+                    fontsize=6.5, color="#1055a8", va="center", alpha=1.0)
 
     # ── saturation curve (100 % RH) ───────────────────────────────────────────
     xs_sat, ys_sat = [], []
@@ -183,7 +183,7 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
         w = _w_sat(t)
         if w is not None and W_MIN <= w <= W_MAX:
             xs_sat.append(t); ys_sat.append(w)
-    ax.plot(xs_sat, ys_sat, color="#1a5fa8", lw=2.2, zorder=3,
+    ax.plot(xs_sat, ys_sat, color="#0047ab", lw=2.8, zorder=3,
             label="Saturation (100 % RH)")
 
     # ── constant WBT lines (every 5 °C) ──────────────────────────────────────
@@ -194,10 +194,10 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             if w is not None and W_MIN <= w <= W_MAX:
                 xs.append(t); ys.append(w)
         if xs:
-            ax.plot(xs, ys, color="#2ca05a", lw=0.7, alpha=0.35, ls="--")
+            ax.plot(xs, ys, color="#00a550", lw=0.9, alpha=0.75, ls="--")
             ax.text(xs[0] - 0.5, ys[0], f"WBT\n{wbt}°C",
-                    fontsize=5.0, color="#1a7a3c", ha="right", va="center",
-                    alpha=0.80)
+                    fontsize=5.0, color="#007a38", ha="right", va="center",
+                    alpha=1.0)
 
     # ── constant enthalpy lines (every 10 kJ/kg) ─────────────────────────────
     for h_kj in range(-10, 130, 10):
@@ -210,10 +210,10 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             if W_MIN <= w <= W_MAX:
                 xs.append(t); ys.append(w)
         if xs:
-            ax.plot(xs, ys, color="#c0392b", lw=0.6, alpha=0.25, ls="-.")
+            ax.plot(xs, ys, color="#e8000d", lw=0.8, alpha=0.70, ls="-.")
             ax.text(xs[0] - 0.3, ys[0], f"h={h_kj}",
-                    fontsize=5.0, color="#922b21", ha="right", va="center",
-                    alpha=0.75)
+                    fontsize=5.0, color="#b50009", ha="right", va="center",
+                    alpha=1.0)
 
     # ── constant specific volume lines ────────────────────────────────────────
     Ra = 287.042
@@ -225,11 +225,11 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             if W_MIN <= w <= W_MAX:
                 xs.append(t); ys.append(w)
         if len(xs) > 2:
-            ax.plot(xs, ys, color="#8e44ad", lw=0.65, alpha=0.35, ls=(0, (3, 5)))
+            ax.plot(xs, ys, color="#9b30d9", lw=0.85, alpha=0.75, ls=(0, (3, 5)))
             # Label near the saturation curve end (lowest T end)
             ax.text(xs[0] - 0.3, ys[0], f"v={v_val}",
-                    fontsize=5.0, color="#6c3483", ha="right", va="center",
-                    alpha=0.80)
+                    fontsize=5.0, color="#7a1db8", ha="right", va="center",
+                    alpha=1.0)
 
     # ── state points ──────────────────────────────────────────────────────────
     point_colors = ["#e74c3c", "#2980b9", "#27ae60", "#e67e22", "#8e44ad", "#16a085"]
@@ -298,11 +298,11 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
 
     # Compact legend for line types
     legend_items = [
-        plt.Line2D([0], [0], color="#1a5fa8", lw=2.2,  label="Saturation (100%RH)"),
-        plt.Line2D([0], [0], color="#4a90d9", lw=0.9,  label="Const. RH"),
-        plt.Line2D([0], [0], color="#2ca05a", lw=0.8,  ls="--", label="Const. WBT"),
-        plt.Line2D([0], [0], color="#c0392b", lw=0.7,  ls="-.", label="Const. Enthalpy"),
-        plt.Line2D([0], [0], color="#8e44ad", lw=0.7,  ls=(0,(3,5)), label="Const. Sp. Volume"),
+        plt.Line2D([0], [0], color="#0047ab", lw=2.8,  label="Saturation (100%RH)"),
+        plt.Line2D([0], [0], color="#1a7dd4", lw=1.0,  label="Const. RH"),
+        plt.Line2D([0], [0], color="#00a550", lw=0.9,  ls="--", label="Const. WBT"),
+        plt.Line2D([0], [0], color="#e8000d", lw=0.8,  ls="-.", label="Const. Enthalpy"),
+        plt.Line2D([0], [0], color="#9b30d9", lw=0.85, ls=(0,(3,5)), label="Const. Sp. Volume"),
     ]
     ax.legend(handles=legend_items, loc="upper right", fontsize=6.5,
               framealpha=0.85, edgecolor="#bdc3c7")
