@@ -30,7 +30,7 @@ st.caption("SI Units  |  Standard Atmospheric Pressure: 101.325 kPa  |  ASHRAE f
 
 # ── session state initialisation ─────────────────────────────────────────────
 # Results are stored here so that clicking Download does not clear the page.
-for _k in ("sp_result", "sp_png", "proc_result", "proc_png"):
+for _k in ("sp_result", "sp_png", "proc_result", "proc_png", "ahu_chain", "ahu_png"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 
@@ -140,7 +140,7 @@ def calc_initial_state(dbt, param_name, param_val):
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 — State Point Calculator
 # ─────────────────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📊  State Point Calculator", "⚙️  Process Analysis"])
+tab1, tab2, tab3 = st.tabs(["📊  State Point Calculator", "⚙️  Process Analysis", "🏭  AHU Chain"])
 
 with tab1:
     left, right = st.columns([1, 2], gap="large")
@@ -516,6 +516,381 @@ with tab2:
                 proc_png,
                 filename=f"psychro_{pr['process'].lower().replace(' ', '_').replace('/', '_')}.png",
             )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 3 — AHU Multi-Process Chain
+# ─────────────────────────────────────────────────────────────────────────────
+with tab3:
+    st.subheader("🏭 AHU Multi-Process Chain")
+    st.caption(
+        "Build a sequence of psychrometric processes as they occur in an Air Handling Unit. "
+        "Each step's output automatically becomes the next step's input. "
+        "All processes are plotted together on a single chart."
+    )
+
+    # ── typical AHU hint ──────────────────────────────────────────────────────
+    with st.expander("💡 Typical AHU sequence (click to expand)", expanded=False):
+        st.markdown(
+            "| Step | Process | Description |\n"
+            "|------|---------|-------------|\n"
+            "| 0 | — | Outdoor / supply air (initial state) |\n"
+            "| 1 | Adiabatic Mixing | Mix outdoor air with return air |\n"
+            "| 2 | Sensible Heating | Pre-heat the mixed air |\n"
+            "| 3 | Cooling & Dehumidification | Cool and remove moisture |\n"
+            "| 4 | Sensible Heating | Re-heat to supply temperature |\n"
+            "| 5 | Humidification | Add moisture to target RH |\n"
+        )
+
+    # ── helpers scoped to this tab ────────────────────────────────────────────
+    _SEC_UNITS = {
+        "Relative Humidity (RH)": "(%)",
+        "Wet Bulb Temperature (WBT)": "(°C)",
+        "Dew Point Temperature (DPT)": "(°C)",
+        "Humidity Ratio (W)": "(kg/kg)",
+    }
+    _SEC_DEFS = {
+        "Relative Humidity (RH)": 40.0,
+        "Wet Bulb Temperature (WBT)": 28.0,
+        "Dew Point Temperature (DPT)": 20.0,
+        "Humidity Ratio (W)": 0.014,
+    }
+    _SEC_BK = {
+        "Relative Humidity (RH)": "RH",
+        "Wet Bulb Temperature (WBT)": "WBT",
+        "Dew Point Temperature (DPT)": "DPT",
+        "Humidity Ratio (W)": "W",
+    }
+
+    # ── SECTION 1: INITIAL STATE ──────────────────────────────────────────────
+    chain = st.session_state["ahu_chain"]
+    with st.expander(
+        "🔵 Step 0 — Set Initial Air State",
+        expanded=(len(chain) == 0),
+    ):
+        _ia, _ib, _ic = st.columns([1.3, 1.3, 0.8])
+        with _ia:
+            _ahu_dbt0, _ahu_dbt0_err = validated_input(
+                "Dry Bulb Temp DBT₀", 35.0, "ahu_dbt0", "(°C)")
+        with _ib:
+            _ahu_sec0 = st.selectbox(
+                "Second parameter", list(_SEC_UNITS.keys()), key="ahu_sec0")
+            _ahu_val0, _ahu_val0_err = validated_input(
+                _ahu_sec0, _SEC_DEFS[_ahu_sec0],
+                "ahu_val0", _SEC_UNITS[_ahu_sec0])
+        with _ic:
+            st.write(""); st.write("")
+            _init_clicked = st.button(
+                "▶ Set Starting Point", key="ahu_init_btn", type="primary")
+
+        if _init_clicked:
+            _errs = []
+            if _ahu_dbt0_err: _errs.append(_ahu_dbt0_err)
+            if _ahu_val0_err: _errs.append(_ahu_val0_err)
+            if _ahu_dbt0 is not None:
+                _e = check_bounds(_ahu_dbt0, "DBT")
+                if _e: _errs.append(_e)
+            if _ahu_val0 is not None:
+                _e = check_bounds(_ahu_val0, _SEC_BK[_ahu_sec0])
+                if _e: _errs.append(_e)
+            if _ahu_dbt0 is not None and _ahu_val0 is not None:
+                _errs += check_secondary(_ahu_dbt0, _ahu_sec0, _ahu_val0)
+            if _errs:
+                for _e in _errs: st.warning(_e)
+            else:
+                try:
+                    _s0 = calc_initial_state(_ahu_dbt0, _ahu_sec0, _ahu_val0)
+                    st.session_state["ahu_chain"] = [{
+                        "state": _s0,
+                        "process": "Initial State",
+                        "result": {},
+                        "mix_stream2": None,
+                    }]
+                    st.session_state["ahu_png"] = None
+                    st.rerun()
+                except Exception as _ex:
+                    st.error(f"Error setting initial state: {_ex}")
+
+    # re-read after possible rerun
+    chain = st.session_state["ahu_chain"]
+
+    if len(chain) > 0:
+        # ── CHAIN SUMMARY TABLE ───────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📋 Process Chain Summary")
+        _summary_rows = []
+        for _i, _step in enumerate(chain):
+            _s = _step["state"]
+            _summary_rows.append({
+                "Step": _i,
+                "Process": _step["process"],
+                "DBT (°C)": _s["DBT"],
+                "WBT (°C)": _s["WBT"],
+                "RH (%)": _s["RH"],
+                "W (kg/kg)": _s["W"],
+                "h (kJ/kg)": _s["h"],
+                "v (m³/kg)": _s["v"],
+            })
+        st.dataframe(
+            pd.DataFrame(_summary_rows),
+            use_container_width=True, hide_index=True,
+        )
+
+        # ── CONTROL BUTTONS ───────────────────────────────────────────────────
+        _bc1, _bc2, _ = st.columns([1, 1, 5])
+        with _bc1:
+            if st.button("↩ Undo Last Step", key="ahu_undo"):
+                st.session_state["ahu_chain"].pop()
+                st.session_state["ahu_png"] = None
+                st.rerun()
+        with _bc2:
+            if st.button("🗑 Clear All", key="ahu_clear"):
+                st.session_state["ahu_chain"] = []
+                st.session_state["ahu_png"] = None
+                st.rerun()
+
+        # ── ADD NEXT STEP ─────────────────────────────────────────────────────
+        st.markdown("---")
+        _cur = chain[-1]["state"]
+        st.markdown(
+            f"#### ➕ Add Next Step &nbsp;&nbsp; "
+            f"<span style='font-size:0.88rem;color:#555;'>"
+            f"Current → DBT {_cur['DBT']}°C | WBT {_cur['WBT']}°C | "
+            f"RH {_cur['RH']}% | W {_cur['W']} kg/kg | h {_cur['h']} kJ/kg"
+            f"</span>",
+            unsafe_allow_html=True,
+        )
+
+        _ac1, _ac2 = st.columns(2)
+        with _ac1:
+            _ahu_proc = st.selectbox("Process type", [
+                "Sensible Heating",
+                "Sensible Cooling",
+                "Humidification",
+                "Dehumidification",
+                "Cooling & Dehumidification",
+                "Heating & Humidification",
+                "Evaporative Cooling",
+                "Adiabatic Mixing",
+            ], key="ahu_proc_sel")
+            _ahu_lbl = st.text_input(
+                "Step label (shown on chart)", value=_ahu_proc, key="ahu_step_lbl")
+
+        # Process-specific parameter inputs
+        _ahu_edbt = _ahu_edbt_err = None
+        _ahu_erh  = _ahu_erh_err  = None
+        _ahu_ew   = _ahu_ew_err   = None
+        _ahu_mdbt2 = _ahu_mdbt2_err = None
+        _ahu_mrh2  = _ahu_mrh2_err  = None
+        _ahu_m1    = _ahu_m1_err    = None
+        _ahu_m2    = _ahu_m2_err    = None
+
+        with _ac2:
+            if _ahu_proc in ("Sensible Heating", "Sensible Cooling", "Evaporative Cooling"):
+                _def2 = (round(_cur["DBT"] + 10, 1) if "Heating" in _ahu_proc
+                         else round(_cur["DBT"] - 8, 1))
+                _ahu_edbt, _ahu_edbt_err = validated_input(
+                    "Target DBT₂", _def2, "ahu_edbt", "(°C)")
+
+            elif _ahu_proc in ("Humidification", "Dehumidification"):
+                _ahu_hum_by = st.radio(
+                    "Specify end state by",
+                    ["RH (%)", "W (kg/kg)"], key="ahu_hum_by", horizontal=True)
+                if _ahu_hum_by == "RH (%)":
+                    _ahu_erh, _ahu_erh_err = validated_input(
+                        "Final RH₂",
+                        85.0 if "Humidi" in _ahu_proc else 30.0,
+                        "ahu_erh", "(%)")
+                else:
+                    _ahu_ew, _ahu_ew_err = validated_input(
+                        "Final W₂", 0.015, "ahu_ew", "(kg/kg)")
+
+            elif _ahu_proc in ("Cooling & Dehumidification",
+                               "Heating & Humidification"):
+                _def_dbt2 = 14.0 if "Cooling" in _ahu_proc else 45.0
+                _ahu_edbt, _ahu_edbt_err = validated_input(
+                    "Final DBT₂", _def_dbt2, "ahu_edbt2", "(°C)")
+                _ahu_hum_by2 = st.radio(
+                    "Final humidity by",
+                    ["RH (%)", "W (kg/kg)"], key="ahu_hum_by2", horizontal=True)
+                if _ahu_hum_by2 == "RH (%)":
+                    _ahu_erh, _ahu_erh_err = validated_input(
+                        "Final RH₂", 90.0, "ahu_erh2", "(%)")
+                else:
+                    _ahu_ew, _ahu_ew_err = validated_input(
+                        "Final W₂", 0.008, "ahu_ew2", "(kg/kg)")
+
+            elif _ahu_proc == "Adiabatic Mixing":
+                st.caption("Stream 1 = current state.  Define the 2nd stream:")
+                _ahu_mdbt2, _ahu_mdbt2_err = validated_input(
+                    "DBT₂ of 2nd stream", 22.0, "ahu_mdbt2", "(°C)")
+                _ahu_mrh2, _ahu_mrh2_err = validated_input(
+                    "RH₂  of 2nd stream", 60.0, "ahu_mrh2",  "(%)")
+                _ahu_m1, _ahu_m1_err = validated_input(
+                    "Mass flow m₁ (current stream)", 3.0, "ahu_m1", "(kg/s)")
+                _ahu_m2, _ahu_m2_err = validated_input(
+                    "Mass flow m₂ (2nd stream)",     1.0, "ahu_m2", "(kg/s)")
+
+        if st.button("➕ Add Step to Chain", key="ahu_add_step", type="primary"):
+            _step_errs = []
+
+            if _ahu_proc in ("Sensible Heating", "Sensible Cooling",
+                             "Evaporative Cooling"):
+                if _ahu_edbt_err: _step_errs.append(_ahu_edbt_err)
+                if _ahu_edbt is not None:
+                    _e = check_bounds(_ahu_edbt, "DBT")
+                    if _e: _step_errs.append(_e)
+                if (_ahu_proc == "Sensible Heating" and _ahu_edbt is not None
+                        and _ahu_edbt <= _cur["DBT"]):
+                    _step_errs.append("⚠️ Target DBT₂ must be > current DBT for Sensible Heating.")
+                if (_ahu_proc == "Sensible Cooling" and _ahu_edbt is not None
+                        and _ahu_edbt >= _cur["DBT"]):
+                    _step_errs.append("⚠️ Target DBT₂ must be < current DBT for Sensible Cooling.")
+                if (_ahu_proc == "Evaporative Cooling" and _ahu_edbt is not None
+                        and _ahu_edbt >= _cur["DBT"]):
+                    _step_errs.append("⚠️ Target DBT₂ must be < current DBT for Evaporative Cooling.")
+
+            elif _ahu_proc in ("Humidification", "Dehumidification"):
+                if _ahu_erh_err: _step_errs.append(_ahu_erh_err)
+                if _ahu_ew_err:  _step_errs.append(_ahu_ew_err)
+                if _ahu_erh is not None:
+                    _e = check_bounds(_ahu_erh, "RH")
+                    if _e: _step_errs.append(_e)
+                if _ahu_ew is not None:
+                    _e = check_bounds(_ahu_ew, "W")
+                    if _e: _step_errs.append(_e)
+
+            elif _ahu_proc in ("Cooling & Dehumidification",
+                               "Heating & Humidification"):
+                if _ahu_edbt_err: _step_errs.append(_ahu_edbt_err)
+                if _ahu_erh_err:  _step_errs.append(_ahu_erh_err)
+                if _ahu_ew_err:   _step_errs.append(_ahu_ew_err)
+                if _ahu_edbt is not None:
+                    _e = check_bounds(_ahu_edbt, "DBT")
+                    if _e: _step_errs.append(_e)
+                if _ahu_erh is not None:
+                    _e = check_bounds(_ahu_erh, "RH")
+                    if _e: _step_errs.append(_e)
+                if _ahu_ew is not None:
+                    _e = check_bounds(_ahu_ew, "W")
+                    if _e: _step_errs.append(_e)
+                if ("Cooling" in _ahu_proc and _ahu_edbt is not None
+                        and _ahu_edbt >= _cur["DBT"]):
+                    _step_errs.append("⚠️ DBT₂ must be < current DBT for Cooling & Dehumidification.")
+                if ("Heating" in _ahu_proc and _ahu_edbt is not None
+                        and _ahu_edbt <= _cur["DBT"]):
+                    _step_errs.append("⚠️ DBT₂ must be > current DBT for Heating & Humidification.")
+
+            elif _ahu_proc == "Adiabatic Mixing":
+                for _v, _e in [
+                    (_ahu_mdbt2, _ahu_mdbt2_err), (_ahu_mrh2, _ahu_mrh2_err),
+                    (_ahu_m1,    _ahu_m1_err),    (_ahu_m2,   _ahu_m2_err),
+                ]:
+                    if _e: _step_errs.append(_e)
+                if _ahu_mdbt2 is not None:
+                    _e = check_bounds(_ahu_mdbt2, "DBT")
+                    if _e: _step_errs.append(_e)
+                if _ahu_mrh2 is not None:
+                    _e = check_bounds(_ahu_mrh2, "RH")
+                    if _e: _step_errs.append(_e)
+                if _ahu_m1 is not None and _ahu_m1 <= 0:
+                    _step_errs.append("⚠️ m₁ must be > 0.")
+                if _ahu_m2 is not None and _ahu_m2 <= 0:
+                    _step_errs.append("⚠️ m₂ must be > 0.")
+
+            if _step_errs:
+                for _e in _step_errs: st.warning(_e)
+            else:
+                try:
+                    _mix_s2 = None
+                    if _ahu_proc == "Sensible Heating":
+                        _s_out, _res = sensible_heating(_cur, _ahu_edbt)
+                    elif _ahu_proc == "Sensible Cooling":
+                        _s_out, _res = sensible_cooling(_cur, _ahu_edbt)
+                    elif _ahu_proc == "Humidification":
+                        _s_out, _res = humidification(_cur, w2=_ahu_ew, rh2=_ahu_erh)
+                    elif _ahu_proc == "Dehumidification":
+                        _s_out, _res = dehumidification(_cur, w2=_ahu_ew, rh2=_ahu_erh)
+                    elif _ahu_proc == "Cooling & Dehumidification":
+                        _s_out, _res = cooling_dehumidification(
+                            _cur, _ahu_edbt, w2=_ahu_ew, rh2=_ahu_erh)
+                    elif _ahu_proc == "Heating & Humidification":
+                        _s_out, _res = heating_humidification(
+                            _cur, _ahu_edbt, w2=_ahu_ew, rh2=_ahu_erh)
+                    elif _ahu_proc == "Evaporative Cooling":
+                        _s_out, _res = evaporative_cooling(_cur, _ahu_edbt)
+                    elif _ahu_proc == "Adiabatic Mixing":
+                        _mix_s2 = from_dbt_rh(_ahu_mdbt2, _ahu_mrh2)
+                        _s_out, _res = adiabatic_mixing(
+                            _cur, _mix_s2, _ahu_m1, _ahu_m2)
+
+                    st.session_state["ahu_chain"].append({
+                        "state":       _s_out,
+                        "process":     _ahu_lbl or _ahu_proc,
+                        "result":      _res,
+                        "mix_stream2": _mix_s2,
+                    })
+                    st.session_state["ahu_png"] = None
+                    st.rerun()
+                except Exception as _ex:
+                    st.error(f"Step calculation error: {_ex}")
+
+        # ── CHART ─────────────────────────────────────────────────────────────
+        if len(chain) >= 2:
+            st.markdown("---")
+            st.markdown("#### 📊 Multi-Process Psychrometric Chart")
+
+            if st.button("Draw Full Chain Chart", key="ahu_draw_chart",
+                         type="primary"):
+                _chart_states = []
+                _chart_pairs  = []
+                _mix_stream_idx = 0   # counter for unique mix-stream labels
+
+                # State 0 — initial
+                _chart_states.append({
+                    "DBT":   chain[0]["state"]["DBT"],
+                    "W":     chain[0]["state"]["W"],
+                    "label": "S0: Initial",
+                })
+
+                for _i in range(1, len(chain)):
+                    _step   = chain[_i]
+                    _s_from = chain[_i - 1]["state"]
+                    _s_to   = _step["state"]
+                    _lbl    = _step["process"]
+
+                    # For adiabatic mixing: add 2nd stream as extra state + arrow
+                    if _step["mix_stream2"] is not None:
+                        _mix_stream_idx += 1
+                        _s2 = _step["mix_stream2"]
+                        _chart_states.append({
+                            "DBT":   _s2["DBT"],
+                            "W":     _s2["W"],
+                            "label": f"Stream 2\n(mix {_mix_stream_idx})",
+                        })
+                        _chart_pairs.append((_s2, _s_to, ""))
+
+                    _chart_states.append({
+                        "DBT":   _s_to["DBT"],
+                        "W":     _s_to["W"],
+                        "label": f"S{_i}: {_lbl}",
+                    })
+                    _chart_pairs.append((_s_from, _s_to, _lbl))
+
+                _fig = draw_psychro_chart(
+                    states=_chart_states,
+                    process_pairs=_chart_pairs,
+                    title="AHU — Multi-Process Psychrometric Chain",
+                )
+                _png = _fig_to_png(_fig)
+                plt.close(_fig)
+                st.session_state["ahu_png"] = _png
+                st.rerun()
+
+            if st.session_state["ahu_png"]:
+                st.image(st.session_state["ahu_png"], use_container_width=True)
+                _download_button(
+                    st.session_state["ahu_png"], "ahu_chain_chart.png")
+
 
 # ── footer ────────────────────────────────────────────────────────────────────
 st.divider()
