@@ -1,3 +1,5 @@
+import io
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -14,6 +16,21 @@ from processes import (
     sensible_heating,
 )
 from psychro_chart import draw_psychro_chart
+
+# ── chart download helper ─────────────────────────────────────────────────────
+
+def _chart_download_button(fig, filename="psychrometric_chart.png"):
+    """Render a PNG download button for a matplotlib figure."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight")
+    buf.seek(0)
+    st.download_button(
+        label="⬇️  Download Chart (PNG)",
+        data=buf,
+        file_name=filename,
+        mime="image/png",
+    )
+
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -190,6 +207,7 @@ with tab1:
                         title="Psychrometric Chart — State Point",
                     )
                     st.pyplot(fig)
+                    _chart_download_button(fig, "state_point_chart.png")
                     plt.close(fig)
                 except Exception as e:
                     st.error(f"Calculation error: {e}")
@@ -465,6 +483,10 @@ with tab2:
                     title=f"Psychrometric Chart — {process}",
                 )
                 st.pyplot(fig)
+                _chart_download_button(
+                    fig,
+                    filename=f"psychro_{process.lower().replace(' ', '_').replace('/', '_')}.png",
+                )
                 plt.close(fig)
 
             except Exception as e:
