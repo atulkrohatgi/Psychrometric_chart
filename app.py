@@ -616,26 +616,66 @@ with tab3:
     chain = st.session_state["ahu_chain"]
 
     if len(chain) > 0:
-        # ── CHAIN SUMMARY TABLE ───────────────────────────────────────────────
+        # ── PROCESS FLOW VISUALIZATION ────────────────────────────────────────
         st.markdown("---")
-        st.markdown("#### 📋 Process Chain Summary")
-        _summary_rows = []
+        st.markdown("#### 🔗 Process Chain Flow")
+
+        # Text-based chain: State 0 → [Process] → State 1 → ...
+        _flow_md = ""
         for _i, _step in enumerate(chain):
             _s = _step["state"]
-            _summary_rows.append({
-                "Step": _i,
-                "Process": _step["process"],
-                "DBT (°C)": _s["DBT"],
-                "WBT (°C)": _s["WBT"],
-                "RH (%)": _s["RH"],
-                "W (kg/kg)": _s["W"],
-                "h (kJ/kg)": _s["h"],
-                "v (m³/kg)": _s["v"],
-            })
-        st.dataframe(
-            pd.DataFrame(_summary_rows),
-            use_container_width=True, hide_index=True,
-        )
+            _box = (
+                f"**State {_i}** &nbsp;—&nbsp; "
+                f"DBT: {_s['DBT']}°C &nbsp;|&nbsp; "
+                f"WBT: {_s['WBT']}°C &nbsp;|&nbsp; "
+                f"RH: {_s['RH']}% &nbsp;|&nbsp; "
+                f"W: {_s['W']} kg/kg &nbsp;|&nbsp; "
+                f"h: {_s['h']} kJ/kg"
+            )
+            st.markdown(_box, unsafe_allow_html=True)
+            if _i < len(chain) - 1:
+                _nxt = chain[_i + 1]
+                _arrow_lbl = _nxt["process"]
+                # Show key result alongside arrow if available
+                _res_hint = ""
+                if _nxt["result"]:
+                    _first_key = next(iter(_nxt["result"]))
+                    _res_hint = f" &nbsp;({_first_key}: {_nxt['result'][_first_key]})"
+                st.markdown(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;"
+                    f"<span style='color:#2e6da4;font-size:1.1rem;'>↓</span>"
+                    f"&nbsp; **{_arrow_lbl}**{_res_hint}",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("")
+
+        # ── DETAILED BEFORE / AFTER TABLE ────────────────────────────────────
+        if len(chain) >= 2:
+            st.markdown("#### 📋 Step-by-Step Results")
+            _detail_rows = []
+            for _i in range(1, len(chain)):
+                _s_in  = chain[_i - 1]["state"]
+                _s_out = chain[_i]["state"]
+                _detail_rows.append({
+                    "Step": _i,
+                    "Process": chain[_i]["process"],
+                    "DBT in (°C)":   _s_in["DBT"],
+                    "DBT out (°C)":  _s_out["DBT"],
+                    "WBT out (°C)":  _s_out["WBT"],
+                    "RH in (%)":     _s_in["RH"],
+                    "RH out (%)":    _s_out["RH"],
+                    "W in (kg/kg)":  _s_in["W"],
+                    "W out (kg/kg)": _s_out["W"],
+                    "h in (kJ/kg)":  _s_in["h"],
+                    "h out (kJ/kg)": _s_out["h"],
+                    "Δh (kJ/kg)":    round(_s_out["h"] - _s_in["h"], 3),
+                    "ΔW (kg/kg)":    round(_s_out["W"] - _s_in["W"], 6),
+                })
+            st.dataframe(
+                pd.DataFrame(_detail_rows),
+                use_container_width=True, hide_index=True,
+            )
 
         # ── CONTROL BUTTONS ───────────────────────────────────────────────────
         _bc1, _bc2, _ = st.columns([1, 1, 5])
@@ -653,14 +693,17 @@ with tab3:
         # ── ADD NEXT STEP ─────────────────────────────────────────────────────
         st.markdown("---")
         _cur = chain[-1]["state"]
-        st.markdown(
-            f"#### ➕ Add Next Step &nbsp;&nbsp; "
-            f"<span style='font-size:0.88rem;color:#555;'>"
-            f"Current → DBT {_cur['DBT']}°C | WBT {_cur['WBT']}°C | "
-            f"RH {_cur['RH']}% | W {_cur['W']} kg/kg | h {_cur['h']} kJ/kg"
-            f"</span>",
-            unsafe_allow_html=True,
+        st.info(
+            f"**Starting point for next step → State {len(chain)-1} "
+            f"(end of previous process)**  \n"
+            f"DBT: {_cur['DBT']} °C &nbsp;|&nbsp; "
+            f"WBT: {_cur['WBT']} °C &nbsp;|&nbsp; "
+            f"RH: {_cur['RH']} % &nbsp;|&nbsp; "
+            f"W: {_cur['W']} kg/kg &nbsp;|&nbsp; "
+            f"h: {_cur['h']} kJ/kg &nbsp;|&nbsp; "
+            f"v: {_cur['v']} m³/kg"
         )
+        st.markdown("#### ➕ Define Next Process — specify **target/end condition only**")
 
         _ac1, _ac2 = st.columns(2)
         with _ac1:
