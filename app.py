@@ -17,21 +17,6 @@ from processes import (
 )
 from psychro_chart import draw_psychro_chart
 
-# ── chart download helper ─────────────────────────────────────────────────────
-
-def _chart_download_button(fig, filename="psychrometric_chart.png"):
-    """Render a PNG download button for a matplotlib figure."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight")
-    buf.seek(0)
-    st.download_button(
-        label="⬇️  Download Chart (PNG)",
-        data=buf,
-        file_name=filename,
-        mime="image/png",
-    )
-
-
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Psychrometric Calculator",
@@ -43,10 +28,16 @@ st.set_page_config(
 st.title("🌡️ Psychrometric Calculator")
 st.caption("SI Units  |  Standard Atmospheric Pressure: 101.325 kPa  |  ASHRAE formulas")
 
-# ── input / validation helpers ────────────────────────────────────────────────
+# ── session state initialisation ─────────────────────────────────────────────
+# Results are stored here so that clicking Download does not clear the page.
+for _k in ("sp_result", "sp_png", "proc_result", "proc_png"):
+    if _k not in st.session_state:
+        st.session_state[_k] = None
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _parse_float(raw, label):
-    """Return (float_value, error_string). error_string is None on success."""
     try:
         return float(raw.strip()), None
     except (ValueError, AttributeError):
@@ -54,11 +45,27 @@ def _parse_float(raw, label):
 
 
 def validated_input(label, default, key, unit="", placeholder=""):
-    """Text field that returns (float | None, error_msg | None)."""
     hint = f"e.g. {default}"
     raw = st.text_input(f"{label}  {unit}", value=str(default), key=key,
                         placeholder=hint if placeholder == "" else placeholder)
     return _parse_float(raw, label)
+
+
+def _fig_to_png(fig, dpi=180):
+    """Save a matplotlib figure to PNG bytes and return them."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    buf.seek(0)
+    return buf.read()
+
+
+def _download_button(png_bytes, filename):
+    st.download_button(
+        label="⬇️  Download Chart (PNG)",
+        data=png_bytes,
+        file_name=filename,
+        mime="image/png",
+    )
 
 
 # Bounds: (min, max, friendly_name, advice)
@@ -87,7 +94,6 @@ def check_bounds(value, key):
 
 
 def check_secondary(dbt, param_name, val):
-    """Cross-parameter checks (WBT ≤ DBT, DPT ≤ DBT, etc.)."""
     errors = []
     if param_name == "Wet Bulb Temperature (WBT)" and val > dbt:
         errors.append("⚠️ **WBT cannot be greater than DBT.** "
@@ -98,7 +104,6 @@ def check_secondary(dbt, param_name, val):
     return errors
 
 
-# ── property table ────────────────────────────────────────────────────────────
 PROPERTY_LABELS = {
     "DBT": ("Dry Bulb Temperature",   "°C"),
     "WBT": ("Wet Bulb Temperature",   "°C"),
@@ -170,47 +175,58 @@ with tab1:
 
         go = st.button("Calculate", type="primary", key="sp_go")
 
+    # ── Run calculation only when button clicked ──────────────────────────────
+    if go:
+        errors = []
+        if dbt_err:  errors.append(dbt_err)
+        if sec_err:  errors.append(sec_err)
+
+        if dbt_val is not None:
+            e = check_bounds(dbt_val, "DBT")
+            if e: errors.append(e)
+
+        bound_keys = {"Wet Bulb Temperature (WBT)": "WBT",
+                      "Dew Point Temperature (DPT)": "DPT",
+                      "Relative Humidity (RH)": "RH",
+                      "Humidity Ratio (W)": "W",
+                      "Specific Volume (v)": "v"}
+        if sec_val is not None:
+            e = check_bounds(sec_val, bound_keys[second])
+            if e: errors.append(e)
+
+        if dbt_val is not None and sec_val is not None:
+            errors += check_secondary(dbt_val, second, sec_val)
+
+        if errors:
+            for e in errors:
+                st.warning(e)
+            st.session_state["sp_result"] = None
+            st.session_state["sp_png"]    = None
+        else:
+            try:
+                state = calc_initial_state(dbt_val, second, sec_val)
+                fig = draw_psychro_chart(
+                    states=[{"DBT": state["DBT"], "W": state["W"],
+                             "label": "State 1"}],
+                    title="Psychrometric Chart — State Point",
+                )
+                png = _fig_to_png(fig)
+                plt.close(fig)
+                st.session_state["sp_result"] = state
+                st.session_state["sp_png"]    = png
+            except Exception as e:
+                st.error(f"Calculation error: {e}")
+                st.session_state["sp_result"] = None
+                st.session_state["sp_png"]    = None
+
+    # ── Display results from session state (survives Download re-run) ─────────
     with right:
-        if go:
-            errors = []
-            if dbt_err:  errors.append(dbt_err)
-            if sec_err:  errors.append(sec_err)
-
-            if dbt_val is not None:
-                e = check_bounds(dbt_val, "DBT")
-                if e: errors.append(e)
-
-            bound_keys = {"Wet Bulb Temperature (WBT)": "WBT",
-                          "Dew Point Temperature (DPT)": "DPT",
-                          "Relative Humidity (RH)": "RH",
-                          "Humidity Ratio (W)": "W",
-                          "Specific Volume (v)": "v"}
-            if sec_val is not None:
-                e = check_bounds(sec_val, bound_keys[second])
-                if e: errors.append(e)
-
-            if dbt_val is not None and sec_val is not None:
-                errors += check_secondary(dbt_val, second, sec_val)
-
-            if errors:
-                for e in errors:
-                    st.warning(e)
-            else:
-                try:
-                    state = calc_initial_state(dbt_val, second, sec_val)
-                    st.subheader("Calculated State Point")
-                    st.dataframe(state_table(state),
-                                 use_container_width=True, hide_index=True)
-                    fig = draw_psychro_chart(
-                        states=[{"DBT": state["DBT"], "W": state["W"],
-                                 "label": "State 1"}],
-                        title="Psychrometric Chart — State Point",
-                    )
-                    st.pyplot(fig)
-                    _chart_download_button(fig, "state_point_chart.png")
-                    plt.close(fig)
-                except Exception as e:
-                    st.error(f"Calculation error: {e}")
+        if st.session_state["sp_result"] is not None:
+            st.subheader("Calculated State Point")
+            st.dataframe(state_table(st.session_state["sp_result"]),
+                         use_container_width=True, hide_index=True)
+            st.image(st.session_state["sp_png"], use_container_width=True)
+            _download_button(st.session_state["sp_png"], "state_point_chart.png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,8 +324,8 @@ with tab2:
 
     run = st.button("Run Process", type="primary", key="run")
 
+    # ── Run calculation only when button clicked ──────────────────────────────
     if run:
-        # ── collect all errors before calculating ─────────────────────────
         errors = []
         if p_dbt_err:  errors.append(p_dbt_err)
         if p_val_err:  errors.append(p_val_err)
@@ -329,7 +345,6 @@ with tab2:
         if p_dbt_val is not None and p_val_val is not None:
             errors += check_secondary(p_dbt_val, p_second, p_val_val)
 
-        # process-specific end-condition validation
         if process in ("Sensible Heating", "Sensible Cooling",
                        "Evaporative / Adiabatic Cooling"):
             if end_dbt_err: errors.append(end_dbt_err)
@@ -391,10 +406,11 @@ with tab2:
             if m2_val is not None and m2_val <= 0:
                 errors.append("⚠️ Mass flow m₂ must be > 0.")
 
-        # ── show errors or run calculation ────────────────────────────────
         if errors:
             for e in errors:
                 st.warning(e)
+            st.session_state["proc_result"] = None
+            st.session_state["proc_png"]    = None
         else:
             try:
                 s1 = calc_initial_state(p_dbt_val, p_second, p_val_val)
@@ -402,95 +418,104 @@ with tab2:
                 if process == "Sensible Heating":
                     s2, res = sensible_heating(s1, end_dbt_val)
                     pairs = [(s1, s2, f"Sensible Heating (+{res['Heat Added (kJ/kg dry air)']} kJ/kg)")]
-
                 elif process == "Sensible Cooling":
                     s2, res = sensible_cooling(s1, end_dbt_val)
                     pairs = [(s1, s2, f"Sensible Cooling (−{res['Heat Removed (kJ/kg dry air)']} kJ/kg)")]
-
                 elif process == "Humidification":
                     s2, res = humidification(s1, w2=end_w2_val, rh2=end_rh2_val)
                     pairs = [(s1, s2, "Humidification")]
-
                 elif process == "Dehumidification":
                     s2, res = dehumidification(s1, w2=end_w2_val, rh2=end_rh2_val)
                     pairs = [(s1, s2, "Dehumidification")]
-
                 elif process == "Cooling & Dehumidification":
                     s2, res = cooling_dehumidification(
                         s1, end_dbt_val, w2=end_w2_val, rh2=end_rh2_val)
                     pairs = [(s1, s2, "Cooling & Dehumidification")]
-
                 elif process == "Heating & Humidification":
                     s2, res = heating_humidification(
                         s1, end_dbt_val, w2=end_w2_val, rh2=end_rh2_val)
                     pairs = [(s1, s2, "Heating & Humidification")]
-
                 elif process == "Evaporative / Adiabatic Cooling":
                     s2, res = evaporative_cooling(s1, end_dbt_val)
                     pairs = [(s1, s2, "Evaporative Cooling")]
-
                 elif process == "Adiabatic Mixing":
                     s_stream2 = from_dbt_rh(mix_dbt2_val, mix_rh2_val)
                     s2, res   = adiabatic_mixing(s1, s_stream2, m1_val, m2_val)
                     pairs     = [(s1, s2, "Mix →"), (s_stream2, s2, "Mix →")]
 
-                # ── tables ─────────────────────────────────────────────────
-                if process == "Adiabatic Mixing":
-                    ca, cb, cc, cd = st.columns(4)
-                    with ca:
-                        st.markdown("**Stream 1**")
-                        st.dataframe(state_table(s1),
-                                     use_container_width=True, hide_index=True)
-                    with cb:
-                        st.markdown("**Stream 2**")
-                        st.dataframe(state_table(s_stream2),
-                                     use_container_width=True, hide_index=True)
-                    with cc:
-                        st.markdown("**Mixed State**")
-                        st.dataframe(state_table(s2),
-                                     use_container_width=True, hide_index=True)
-                    with cd:
-                        st.markdown("**Process Results**")
-                        for k, v in res.items():
-                            st.metric(k, v)
-                    chart_states = [
-                        {"DBT": s1["DBT"],        "W": s1["W"],        "label": "Stream 1"},
-                        {"DBT": s_stream2["DBT"], "W": s_stream2["W"], "label": "Stream 2"},
-                        {"DBT": s2["DBT"],         "W": s2["W"],         "label": "Mixed"},
-                    ]
-                else:
-                    ca, cb, cc = st.columns(3)
-                    with ca:
-                        st.markdown("**Initial State (1)**")
-                        st.dataframe(state_table(s1),
-                                     use_container_width=True, hide_index=True)
-                    with cb:
-                        st.markdown("**Final State (2)**")
-                        st.dataframe(state_table(s2),
-                                     use_container_width=True, hide_index=True)
-                    with cc:
-                        st.markdown("**Process Results**")
-                        for k, v in res.items():
-                            st.metric(k, v)
-                    chart_states = [
-                        {"DBT": s1["DBT"], "W": s1["W"], "label": "State 1"},
-                        {"DBT": s2["DBT"], "W": s2["W"], "label": "State 2"},
-                    ]
-
                 fig = draw_psychro_chart(
-                    states=chart_states,
+                    states=(
+                        [{"DBT": s1["DBT"],        "W": s1["W"],        "label": "Stream 1"},
+                         {"DBT": s_stream2["DBT"], "W": s_stream2["W"], "label": "Stream 2"},
+                         {"DBT": s2["DBT"],        "W": s2["W"],        "label": "Mixed"}]
+                        if process == "Adiabatic Mixing" else
+                        [{"DBT": s1["DBT"], "W": s1["W"], "label": "State 1"},
+                         {"DBT": s2["DBT"], "W": s2["W"], "label": "State 2"}]
+                    ),
                     process_pairs=pairs,
                     title=f"Psychrometric Chart — {process}",
                 )
-                st.pyplot(fig)
-                _chart_download_button(
-                    fig,
-                    filename=f"psychro_{process.lower().replace(' ', '_').replace('/', '_')}.png",
-                )
+                png = _fig_to_png(fig)
                 plt.close(fig)
+
+                st.session_state["proc_result"] = {
+                    "process": process,
+                    "s1": s1,
+                    "s2": s2,
+                    "res": res,
+                    "is_mixing": process == "Adiabatic Mixing",
+                    "s_stream2": s_stream2 if process == "Adiabatic Mixing" else None,
+                }
+                st.session_state["proc_png"] = png
 
             except Exception as e:
                 st.error(f"Process error: {e}")
+                st.session_state["proc_result"] = None
+                st.session_state["proc_png"]    = None
+
+    # ── Display results from session state (survives Download re-run) ─────────
+    pr = st.session_state.get("proc_result")
+    if pr is not None:
+        if pr["is_mixing"]:
+            ca, cb, cc, cd = st.columns(4)
+            with ca:
+                st.markdown("**Stream 1**")
+                st.dataframe(state_table(pr["s1"]),
+                             use_container_width=True, hide_index=True)
+            with cb:
+                st.markdown("**Stream 2**")
+                st.dataframe(state_table(pr["s_stream2"]),
+                             use_container_width=True, hide_index=True)
+            with cc:
+                st.markdown("**Mixed State**")
+                st.dataframe(state_table(pr["s2"]),
+                             use_container_width=True, hide_index=True)
+            with cd:
+                st.markdown("**Process Results**")
+                for k, v in pr["res"].items():
+                    st.metric(k, v)
+        else:
+            ca, cb, cc = st.columns(3)
+            with ca:
+                st.markdown("**Initial State (1)**")
+                st.dataframe(state_table(pr["s1"]),
+                             use_container_width=True, hide_index=True)
+            with cb:
+                st.markdown("**Final State (2)**")
+                st.dataframe(state_table(pr["s2"]),
+                             use_container_width=True, hide_index=True)
+            with cc:
+                st.markdown("**Process Results**")
+                for k, v in pr["res"].items():
+                    st.metric(k, v)
+
+        proc_png = st.session_state.get("proc_png")
+        if proc_png:
+            st.image(proc_png, use_container_width=True)
+            _download_button(
+                proc_png,
+                filename=f"psychro_{pr['process'].lower().replace(' ', '_').replace('/', '_')}.png",
+            )
 
 # ── footer ────────────────────────────────────────────────────────────────────
 st.divider()
