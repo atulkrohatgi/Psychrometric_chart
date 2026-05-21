@@ -30,9 +30,11 @@ st.caption("SI Units  |  Standard Atmospheric Pressure: 101.325 kPa  |  ASHRAE f
 
 # ── session state initialisation ─────────────────────────────────────────────
 # Results are stored here so that clicking Download does not clear the page.
-for _k in ("sp_result", "sp_png", "proc_result", "proc_png", "ahu_chain", "ahu_png"):
+for _k in ("sp_result", "sp_png", "proc_result", "proc_png", "ahu_png"):
     if _k not in st.session_state:
         st.session_state[_k] = None
+if "ahu_chain" not in st.session_state:
+    st.session_state["ahu_chain"] = []   # must be a list, not None
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
