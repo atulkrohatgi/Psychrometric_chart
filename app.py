@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from psychro_calc import from_dbt_dpt, from_dbt_rh, from_dbt_v, from_dbt_w, from_dbt_wbt
+from psychro_calc import from_dbt_dpt, from_dbt_h, from_dbt_rh, from_dbt_v, from_dbt_w, from_dbt_wbt
 from processes import (
     adiabatic_mixing,
     cooling_dehumidification,
@@ -84,6 +84,8 @@ BOUNDS = {
             "W must be between 0 and 0.030 kg/kg dry air."),
     "v":   (  0.75,  0.96, "Specific Volume",
             "v must be between 0.75 and 0.96 m³/kg dry air."),
+    "h":   (-10.0, 130.0,  "Specific Enthalpy",
+            "h must be between −10 and 130 kJ/kg dry air."),
 }
 
 
@@ -136,6 +138,8 @@ def calc_initial_state(dbt, param_name, param_val):
         return from_dbt_rh(dbt, param_val)
     if param_name == "Humidity Ratio (W)":
         return from_dbt_w(dbt, param_val)
+    if param_name == "Specific Enthalpy (h)":
+        return from_dbt_h(dbt, param_val)
     return from_dbt_v(dbt, param_val)
 
 
@@ -319,8 +323,25 @@ with tab2:
             st.markdown("*Second air stream*")
             mix_dbt2_val, mix_dbt2_err = validated_input(
                 "DBT₂  stream 2", 15.0, "mix_dbt2", "(°C)")
-            mix_rh2_val, mix_rh2_err   = validated_input(
-                "RH₂   stream 2", 80.0, "mix_rh2",  "(%)")
+            mix_sec2 = st.selectbox("Second parameter — stream 2", [
+                "Relative Humidity (RH)",
+                "Wet Bulb Temperature (WBT)",
+                "Dew Point Temperature (DPT)",
+                "Humidity Ratio (W)",
+                "Specific Enthalpy (h)",
+            ], key="mix_sec2")
+            _mix2_defs  = {"Relative Humidity (RH)": 80.0,
+                           "Wet Bulb Temperature (WBT)": 12.0,
+                           "Dew Point Temperature (DPT)": 8.0,
+                           "Humidity Ratio (W)": 0.012,
+                           "Specific Enthalpy (h)": 45.0}
+            _mix2_units = {"Relative Humidity (RH)": "(%)",
+                           "Wet Bulb Temperature (WBT)": "(°C)",
+                           "Dew Point Temperature (DPT)": "(°C)",
+                           "Humidity Ratio (W)": "(kg/kg)",
+                           "Specific Enthalpy (h)": "(kJ/kg)"}
+            mix_sec2_val, mix_sec2_err = validated_input(
+                mix_sec2, _mix2_defs[mix_sec2], "mix_sec2_val", _mix2_units[mix_sec2])
             m1_val, m1_err = validated_input("Mass flow  m₁", 2.0, "m1", "(kg/s)")
             m2_val, m2_err = validated_input("Mass flow  m₂", 1.0, "m2", "(kg/s)")
 
@@ -394,15 +415,22 @@ with tab2:
                 errors.append("⚠️ Final DBT₂ must be **greater than** DBT₁ for Heating & Humidification.")
 
         elif process == "Adiabatic Mixing":
-            for v, e in [(mix_dbt2_val, mix_dbt2_err), (mix_rh2_val, mix_rh2_err),
+            _mix2_bk = {"Relative Humidity (RH)": "RH",
+                        "Wet Bulb Temperature (WBT)": "WBT",
+                        "Dew Point Temperature (DPT)": "DPT",
+                        "Humidity Ratio (W)": "W",
+                        "Specific Enthalpy (h)": "h"}
+            for v, e in [(mix_dbt2_val, mix_dbt2_err), (mix_sec2_val, mix_sec2_err),
                          (m1_val, m1_err), (m2_val, m2_err)]:
                 if e: errors.append(e)
             if mix_dbt2_val is not None:
                 eb = check_bounds(mix_dbt2_val, "DBT")
                 if eb: errors.append(eb)
-            if mix_rh2_val is not None:
-                eb = check_bounds(mix_rh2_val, "RH")
+            if mix_sec2_val is not None:
+                eb = check_bounds(mix_sec2_val, _mix2_bk[mix_sec2])
                 if eb: errors.append(eb)
+            if mix_dbt2_val is not None and mix_sec2_val is not None:
+                errors += check_secondary(mix_dbt2_val, mix_sec2, mix_sec2_val)
             if m1_val is not None and m1_val <= 0:
                 errors.append("⚠️ Mass flow m₁ must be > 0.")
             if m2_val is not None and m2_val <= 0:
@@ -441,7 +469,7 @@ with tab2:
                     s2, res = evaporative_cooling(s1, end_dbt_val)
                     pairs = [(s1, s2, "Evaporative Cooling")]
                 elif process == "Adiabatic Mixing":
-                    s_stream2 = from_dbt_rh(mix_dbt2_val, mix_rh2_val)
+                    s_stream2 = calc_initial_state(mix_dbt2_val, mix_sec2, mix_sec2_val)
                     s2, res   = adiabatic_mixing(s1, s_stream2, m1_val, m2_val)
                     pairs     = [(s1, s2, "Mix →"), (s_stream2, s2, "Mix →")]
 
@@ -724,10 +752,11 @@ with tab3:
         _ahu_edbt = _ahu_edbt_err = None
         _ahu_erh  = _ahu_erh_err  = None
         _ahu_ew   = _ahu_ew_err   = None
-        _ahu_mdbt2 = _ahu_mdbt2_err = None
-        _ahu_mrh2  = _ahu_mrh2_err  = None
-        _ahu_m1    = _ahu_m1_err    = None
-        _ahu_m2    = _ahu_m2_err    = None
+        _ahu_mdbt2   = _ahu_mdbt2_err   = None
+        _ahu_msec2   = None
+        _ahu_msec2_val = _ahu_msec2_err = None
+        _ahu_m1      = _ahu_m1_err      = None
+        _ahu_m2      = _ahu_m2_err      = None
 
         with _ac2:
             if _ahu_proc in ("Sensible Heating", "Sensible Cooling", "Evaporative Cooling"):
@@ -768,8 +797,26 @@ with tab3:
                 st.caption("Stream 1 = current state.  Define the 2nd stream:")
                 _ahu_mdbt2, _ahu_mdbt2_err = validated_input(
                     "DBT₂ of 2nd stream", 22.0, "ahu_mdbt2", "(°C)")
-                _ahu_mrh2, _ahu_mrh2_err = validated_input(
-                    "RH₂  of 2nd stream", 60.0, "ahu_mrh2",  "(%)")
+                _ahu_msec2 = st.selectbox("Second parameter — 2nd stream", [
+                    "Relative Humidity (RH)",
+                    "Wet Bulb Temperature (WBT)",
+                    "Dew Point Temperature (DPT)",
+                    "Humidity Ratio (W)",
+                    "Specific Enthalpy (h)",
+                ], key="ahu_msec2")
+                _ahu_mix2_defs  = {"Relative Humidity (RH)": 60.0,
+                                   "Wet Bulb Temperature (WBT)": 18.0,
+                                   "Dew Point Temperature (DPT)": 12.0,
+                                   "Humidity Ratio (W)": 0.010,
+                                   "Specific Enthalpy (h)": 55.0}
+                _ahu_mix2_units = {"Relative Humidity (RH)": "(%)",
+                                   "Wet Bulb Temperature (WBT)": "(°C)",
+                                   "Dew Point Temperature (DPT)": "(°C)",
+                                   "Humidity Ratio (W)": "(kg/kg)",
+                                   "Specific Enthalpy (h)": "(kJ/kg)"}
+                _ahu_msec2_val, _ahu_msec2_err = validated_input(
+                    _ahu_msec2, _ahu_mix2_defs[_ahu_msec2],
+                    "ahu_msec2_val", _ahu_mix2_units[_ahu_msec2])
                 _ahu_m1, _ahu_m1_err = validated_input(
                     "Mass flow m₁ (current stream)", 3.0, "ahu_m1", "(kg/s)")
                 _ahu_m2, _ahu_m2_err = validated_input(
@@ -826,17 +873,26 @@ with tab3:
                     _step_errs.append("⚠️ DBT₂ must be > current DBT for Heating & Humidification.")
 
             elif _ahu_proc == "Adiabatic Mixing":
+                _ahu_mix2_bk = {"Relative Humidity (RH)": "RH",
+                                "Wet Bulb Temperature (WBT)": "WBT",
+                                "Dew Point Temperature (DPT)": "DPT",
+                                "Humidity Ratio (W)": "W",
+                                "Specific Enthalpy (h)": "h"}
                 for _v, _e in [
-                    (_ahu_mdbt2, _ahu_mdbt2_err), (_ahu_mrh2, _ahu_mrh2_err),
-                    (_ahu_m1,    _ahu_m1_err),    (_ahu_m2,   _ahu_m2_err),
+                    (_ahu_mdbt2,     _ahu_mdbt2_err),
+                    (_ahu_msec2_val, _ahu_msec2_err),
+                    (_ahu_m1,        _ahu_m1_err),
+                    (_ahu_m2,        _ahu_m2_err),
                 ]:
                     if _e: _step_errs.append(_e)
                 if _ahu_mdbt2 is not None:
                     _e = check_bounds(_ahu_mdbt2, "DBT")
                     if _e: _step_errs.append(_e)
-                if _ahu_mrh2 is not None:
-                    _e = check_bounds(_ahu_mrh2, "RH")
+                if _ahu_msec2_val is not None:
+                    _e = check_bounds(_ahu_msec2_val, _ahu_mix2_bk[_ahu_msec2])
                     if _e: _step_errs.append(_e)
+                if _ahu_mdbt2 is not None and _ahu_msec2_val is not None:
+                    _step_errs += check_secondary(_ahu_mdbt2, _ahu_msec2, _ahu_msec2_val)
                 if _ahu_m1 is not None and _ahu_m1 <= 0:
                     _step_errs.append("⚠️ m₁ must be > 0.")
                 if _ahu_m2 is not None and _ahu_m2 <= 0:
@@ -864,7 +920,7 @@ with tab3:
                     elif _ahu_proc == "Evaporative Cooling":
                         _s_out, _res = evaporative_cooling(_cur, _ahu_edbt)
                     elif _ahu_proc == "Adiabatic Mixing":
-                        _mix_s2 = from_dbt_rh(_ahu_mdbt2, _ahu_mrh2)
+                        _mix_s2 = calc_initial_state(_ahu_mdbt2, _ahu_msec2, _ahu_msec2_val)
                         _s_out, _res = adiabatic_mixing(
                             _cur, _mix_s2, _ahu_m1, _ahu_m2)
 

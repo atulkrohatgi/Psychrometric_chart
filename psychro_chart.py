@@ -4,6 +4,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch, Arc
+from matplotlib.ticker import MultipleLocator, AutoMinorLocator
 import psychrolib
 
 psychrolib.SetUnitSystem(psychrolib.SI)
@@ -41,98 +42,83 @@ def _w_wbt(dbt, wbt):
         return None
 
 
-# ── SHF helper ────────────────────────────────────────────────────────────────
-
-def _shf_data_slope(shf):
-    """Return dW/dT slope (kg/kg per °C) for a given SHF. None → vertical."""
-    if abs(shf) < 1e-9:          # SHF = 0 → pure latent → vertical
-        return None
-    return 1.006 * (1.0 - shf) / (2501.0 * shf)
-
-
-# ── SHF protractor (inset axes) ───────────────────────────────────────────────
+# ── SHF protractor ────────────────────────────────────────────────────────────
 
 def _draw_shf_protractor(fig, ax):
     """
-    Clean vertical SHF scale on the right edge of the chart, parallel to Y-axis.
-    Uses SHF value directly as the y-coordinate (linear, evenly spaced).
-    Positive SHF: dark blue.  Negative SHF: red.
-    Also marks the alignment circle on the main chart body.
+    Geometrically correct SHF protractor drawn in main-chart coordinates
+    (clip_on=False so it lives just right of DBT_MAX).
+
+    The scale bar is placed at x_s °C.  For each SHF value the tick is at:
+        W_tick = W_ref + slope * (x_s - T_ref)
+        slope  = 1.006 * (1 - SHF) / (2501 * SHF)
+
+    Consequence:
+      • SHF = 1.0  → slope = 0  → W_tick = W_ref  (same level as alignment
+                                   circle — connecting line is horizontal)
+      • SHF < 1.0  → positive slope → W_tick rises above W_ref
+      • Going UP the scale, SHF decreases toward 0 (pure latent process)
+      • A straight line from the alignment circle to any tick gives the
+        slope of that psychrometric process on the chart.
     """
-    fig.canvas.draw()   # ensure layout is finalised before adding the inset
+    # ── geometry ──────────────────────────────────────────────────────────────
+    x_s     = DBT_MAX + 3          # scale x-position (°C, right of chart)
+    delta_x = x_s - _T_REF        # horiz distance from alignment circle
 
-    # ── SHF values ────────────────────────────────────────────────────────────
-    shf_values = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
-                  0.0, -0.1, -0.2, -0.3, -0.5]
-    SHF_TOP =  1.05    # inset y-range top
-    SHF_BOT = -0.58    # inset y-range bottom
+    def _w_tick(shf):
+        if abs(shf) < 1e-9:        # SHF = 0 → pure latent → vertical process
+            return W_MAX
+        slope = 1.006 * (1.0 - shf) / (2501.0 * shf)
+        return _W_REF + slope * delta_x
 
-    # ── inset axes: right of main axes, full height ───────────────────────────
-    axs = ax.inset_axes([1.22, 0.0, 0.09, 1.0])
-    axs.set_xlim(0, 1)
-    axs.set_ylim(SHF_BOT, SHF_TOP)
-    axs.axis("off")
-    axs.patch.set_facecolor("#eef2f9")
-    axs.patch.set_alpha(0.95)
+    # ── scale bar ─────────────────────────────────────────────────────────────
+    ax.plot([x_s, x_s], [_W_REF - 0.0005, W_MAX + 0.0002],
+            color="#2c3e50", lw=1.8, clip_on=False, zorder=20,
+            solid_capstyle="round")
 
-    # ── thin border ───────────────────────────────────────────────────────────
-    for spine in ["top", "bottom", "left", "right"]:
-        axs.spines[spine].set_visible(False)
-
-    # ── vertical scale line ───────────────────────────────────────────────────
-    lx = 0.18                   # x of the scale bar (axes-fraction of inset)
-    axs.plot([lx, lx], [-0.5, 1.0], color="#2c3e50", lw=1.8, zorder=3,
-             solid_capstyle="round")
-
-    # ── dashed reference at SHF = 0 ──────────────────────────────────────────
-    axs.plot([0.0, lx + 0.30], [0.0, 0.0],
-             color="#7f8c8d", lw=0.9, ls="--", zorder=2)
-
-    # ── ticks and labels ──────────────────────────────────────────────────────
-    MAJOR = {1.0, 0.5, 0.0}      # bolder ticks and labels
+    # ── ticks & labels ────────────────────────────────────────────────────────
+    shf_values = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
+    MAJOR = {1.0, 0.5}
 
     for shf in shf_values:
-        is_neg  = shf < 0
+        w = _w_tick(shf)
+        clipped = w > W_MAX          # geometrically above chart top
+        w_draw  = min(w, W_MAX)
+
         is_maj  = shf in MAJOR
-        clr     = "#c0392b" if is_neg else "#1a252f"
-        tick_w  = lx + (0.22 if is_maj else 0.15)   # tick end x
-        lw_tick = 1.4 if is_maj else 0.9
-        fs      = 8.5 if is_maj else 7.0
+        clr     = "#1a252f"
+        t_len   = 0.75 if is_maj else 0.5
+        lw_t    = 1.4  if is_maj else 0.9
+        fs      = 8.5  if is_maj else 7.5
         fw      = "bold" if is_maj else "normal"
 
-        # tick mark (pointing right from the scale bar)
-        axs.plot([lx, tick_w], [shf, shf], color=clr, lw=lw_tick, zorder=4)
+        ax.plot([x_s, x_s + t_len], [w_draw, w_draw],
+                color=clr, lw=lw_t, clip_on=False, zorder=21)
 
-        # label
-        if shf == 0.0:
-            txt = "0"
-        elif is_neg:
-            txt = f"−{abs(shf):.1f}"   # proper minus sign
-        else:
-            txt = f"{shf:.1f}"
+        lbl = ("▲ " if clipped else "") + f"{shf:.1f}"
+        ax.text(x_s + t_len + 0.3, w_draw, lbl,
+                fontsize=fs, color=clr, fontweight=fw,
+                ha="left", va="center", clip_on=False, zorder=22)
 
-        axs.text(tick_w + 0.06, shf, txt,
-                 ha="left", va="center",
-                 fontsize=fs, fontweight=fw, color=clr, zorder=5)
+    # SHF = 0  (pure latent: vertical process — tick at chart top)
+    ax.plot([x_s, x_s + 0.5], [W_MAX, W_MAX],
+            color="#1a252f", lw=0.9, clip_on=False, zorder=21)
+    ax.text(x_s + 0.8, W_MAX, "0  (latent)",
+            fontsize=7, color="#1a252f",
+            ha="left", va="center", clip_on=False, zorder=22)
 
-    # ── section divider at SHF = 0 (thin horizontal line) ────────────────────
-    axs.axhline(0.0, color="#aab4be", lw=0.5, zorder=1, xmin=0, xmax=0.8)
+    # ── horizontal reference: alignment circle → SHF = 1.0 ───────────────────
+    ax.plot([_T_REF, x_s], [_W_REF, _W_REF],
+            color="#aab4be", lw=0.9, ls="--", clip_on=False, zorder=8)
 
-    # ── title block ───────────────────────────────────────────────────────────
-    axs.text(0.50, 1.04,  "SHF",
-             ha="center", va="bottom",
-             fontsize=10, fontweight="bold", color="#1a252f", zorder=6)
-    axs.text(0.50, 0.99, "Sensible Heat\n/ Total Heat",
-             ha="center", va="top",
-             fontsize=5.5, color="#5d6d7e", linespacing=1.4, zorder=6)
-
-    # ── "positive" / "negative" micro-labels ─────────────────────────────────
-    axs.text(lx - 0.04, 0.55,  "▲ positive",
-             ha="right", va="center", fontsize=5, color="#1a252f",
-             rotation=90, alpha=0.55)
-    axs.text(lx - 0.04, -0.25, "▼ negative",
-             ha="right", va="center", fontsize=5, color="#c0392b",
-             rotation=90, alpha=0.55)
+    # ── title ─────────────────────────────────────────────────────────────────
+    ax.text(x_s + 0.3, W_MAX + 0.0018, "SHF",
+            fontsize=10, color="#1a252f", fontweight="bold",
+            ha="left", va="bottom", clip_on=False, zorder=22)
+    ax.text(x_s + 0.3, W_MAX + 0.0008,
+            "Sensible Heat / Total Heat",
+            fontsize=5.5, color="#5d6d7e",
+            ha="left", va="bottom", clip_on=False, zorder=22)
 
     # ── alignment circle on main chart ────────────────────────────────────────
     ax.plot(_T_REF, _W_REF, "o",
@@ -199,7 +185,11 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
                     fontsize=5.0, color="#007a38", ha="right", va="center",
                     alpha=1.0)
 
-    # ── constant enthalpy lines (every 10 kJ/kg) ─────────────────────────────
+    # ── constant enthalpy lines (every 10 kJ/kg) with visible scale ──────────
+    _lbl_kw = dict(fontsize=8, color="#b50009", fontweight="bold",
+                   clip_on=False,
+                   bbox=dict(boxstyle="round,pad=0.18", fc="white",
+                             alpha=0.88, ec="#e8000d", lw=0.6))
     for h_kj in range(-10, 130, 10):
         xs, ys = [], []
         for t in dbt_arr:
@@ -210,10 +200,27 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             if W_MIN <= w <= W_MAX:
                 xs.append(t); ys.append(w)
         if xs:
-            ax.plot(xs, ys, color="#e8000d", lw=0.8, alpha=0.70, ls="-.")
-            ax.text(xs[0] - 0.3, ys[0], f"h={h_kj}",
-                    fontsize=5.0, color="#b50009", ha="right", va="center",
-                    alpha=1.0)
+            ax.plot(xs, ys, color="#e8000d", lw=0.9, alpha=0.75, ls="-.")
+
+            # Lines that enter from the LEFT boundary → label on left scale
+            if xs[0] <= DBT_MIN + 0.5:
+                ax.text(xs[0] - 0.7, ys[0], f"{h_kj}",
+                        ha="right", va="center", **_lbl_kw)
+
+            # Lines that enter from the TOP boundary (W_MAX) → label along top
+            if ys[0] >= W_MAX - 0.001:
+                ax.text(xs[0], W_MAX + 0.00035, f"{h_kj}",
+                        ha="center", va="bottom", **_lbl_kw)
+
+    # Enthalpy scale axis labels
+    ax.text(DBT_MIN - 3.8, W_MAX * 0.55, "h\n(kJ/kg)",
+            fontsize=8.5, color="#b50009", fontweight="bold",
+            ha="center", va="center", clip_on=False,
+            bbox=dict(boxstyle="round,pad=0.3", fc="#fff0f0",
+                      alpha=0.9, ec="#e8000d", lw=0.8))
+    ax.text((DBT_MIN + DBT_MAX) * 0.38, W_MAX + 0.00085, "h  (kJ/kg)",
+            fontsize=8.5, color="#b50009", fontweight="bold",
+            ha="center", va="bottom", clip_on=False)
 
     # ── constant specific volume lines ────────────────────────────────────────
     Ra = 287.042
@@ -287,14 +294,33 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
     ax.set_xlabel("Dry Bulb Temperature  (°C)", fontsize=12, labelpad=8)
     ax.set_ylabel("Humidity Ratio  W  (kg/kg dry air)", fontsize=12, labelpad=8)
     ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-    ax.grid(True, color="gray", alpha=0.18, linewidth=0.5)
-    ax.tick_params(labelsize=9)
+
+    # Major ticks: every 5 °C on X, every 0.005 kg/kg on Y
+    ax.xaxis.set_major_locator(MultipleLocator(5))
+    ax.yaxis.set_major_locator(MultipleLocator(0.005))
+
+    # Minor ticks: every 1 °C on X, every 0.001 kg/kg on Y
+    ax.xaxis.set_minor_locator(MultipleLocator(1))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.001))
+
+    # Major grid
+    ax.grid(True, which="major", color="gray", alpha=0.22, linewidth=0.6)
+    # Minor grid (lighter)
+    ax.grid(True, which="minor", color="gray", alpha=0.10, linewidth=0.3)
+
+    # Major tick style
+    ax.tick_params(which="major", labelsize=9, length=5, width=0.8)
+    # Minor tick style (no labels, shorter)
+    ax.tick_params(which="minor", labelsize=0, length=3, width=0.5)
 
     # Secondary y-axis in g/kg
     ax2 = ax.twinx()
     ax2.set_ylim(W_MIN * 1000, (W_MAX + 0.001) * 1000)
     ax2.set_ylabel("Humidity Ratio  (g/kg dry air)", fontsize=10, labelpad=8)
-    ax2.tick_params(labelsize=8)
+    ax2.yaxis.set_major_locator(MultipleLocator(5))
+    ax2.yaxis.set_minor_locator(MultipleLocator(1))
+    ax2.tick_params(which="major", labelsize=8, length=5, width=0.8)
+    ax2.tick_params(which="minor", labelsize=0, length=3, width=0.5)
 
     # Compact legend for line types
     legend_items = [
@@ -307,8 +333,8 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
     ax.legend(handles=legend_items, loc="upper right", fontsize=6.5,
               framealpha=0.85, edgecolor="#bdc3c7")
 
-    # Reserve right margin for the SHF vertical strip (ax.inset_axes needs space)
-    fig.subplots_adjust(left=0.08, right=0.74, bottom=0.09, top=0.93)
+    # Right margin leaves room for the SHF scale drawn with clip_on=False
+    fig.subplots_adjust(left=0.08, right=0.78, bottom=0.09, top=0.93)
 
     # ── SHF vertical scale + alignment circle ──────────────────────────────────
     _draw_shf_protractor(fig, ax)

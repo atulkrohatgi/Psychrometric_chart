@@ -52,3 +52,12 @@ def from_dbt_v(dbt, v):
     T  = dbt + 273.15
     w  = max(1e-7, ((v * PRESSURE) / (Ra * T) - 1.0) / 1.6078)
     return _make_state(dbt, w)
+
+
+def from_dbt_h(dbt, h_kj):
+    """State from dry-bulb temperature (°C) and specific enthalpy (kJ/kg dry air)."""
+    denom = 2501.0 + 1.86 * dbt
+    if denom <= 0:
+        raise ValueError(f"Cannot derive W from h={h_kj} kJ/kg at DBT={dbt} °C")
+    w = (h_kj - 1.006 * dbt) / denom
+    return _make_state(dbt, max(w, 1e-7))
