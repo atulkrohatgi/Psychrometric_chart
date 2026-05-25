@@ -53,70 +53,77 @@ def _draw_shf_protractor(fig, ax):
         W_tick = W_ref + slope * (x_s - T_ref)
         slope  = 1.006 * (1 - SHF) / (2501 * SHF)
 
-    Consequence:
-      • SHF = 1.0  → slope = 0  → W_tick = W_ref  (same level as alignment
-                                   circle — connecting line is horizontal)
-      • SHF < 1.0  → positive slope → W_tick rises above W_ref
-      • Going UP the scale, SHF decreases toward 0 (pure latent process)
-      • A straight line from the alignment circle to any tick gives the
-        slope of that psychrometric process on the chart.
+    Only SHF values whose tick falls within [W_REF, W_MAX - margin] are drawn
+    as individual ticks; values that would clip above W_MAX are summarised with
+    an upward arrow at the scale-bar top, eliminating all vertical overlap.
     """
     # ── geometry ──────────────────────────────────────────────────────────────
-    x_s     = DBT_MAX + 3          # scale x-position (°C, right of chart)
+    x_s     = DBT_MAX + 4          # scale x-position (°C, right of chart)
     delta_x = x_s - _T_REF        # horiz distance from alignment circle
 
     def _w_tick(shf):
-        if abs(shf) < 1e-9:        # SHF = 0 → pure latent → vertical process
+        if abs(shf) < 1e-9:
             return W_MAX
         slope = 1.006 * (1.0 - shf) / (2501.0 * shf)
         return _W_REF + slope * delta_x
 
+    # ── determine which SHF ticks fit inside the chart (with 0.001 safety gap)
+    ALL_SHF   = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
+    THRESHOLD = W_MAX - 0.001          # strict upper limit for visible ticks
+    visible   = [s for s in ALL_SHF if _w_tick(s) <= THRESHOLD]
+    hidden    = [s for s in ALL_SHF if _w_tick(s) >  THRESHOLD]
+
+    # Top of scale bar sits just above the highest visible tick
+    w_bar_top = _w_tick(visible[-1]) + 0.0015 if visible else W_MAX
+
     # ── scale bar ─────────────────────────────────────────────────────────────
-    ax.plot([x_s, x_s], [_W_REF - 0.0005, W_MAX + 0.0002],
+    ax.plot([x_s, x_s], [_W_REF - 0.0005, w_bar_top],
             color="#2c3e50", lw=1.8, clip_on=False, zorder=20,
             solid_capstyle="round")
 
-    # ── ticks & labels ────────────────────────────────────────────────────────
-    shf_values = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
+    # ── ticks & labels for visible SHF values ────────────────────────────────
     MAJOR = {1.0, 0.5}
+    for shf in visible:
+        w      = _w_tick(shf)
+        is_maj = shf in MAJOR
+        clr    = "#1a252f"
+        t_len  = 0.75 if is_maj else 0.50
+        lw_t   = 1.4  if is_maj else 0.9
+        fs     = 8.5  if is_maj else 7.5
+        fw     = "bold" if is_maj else "normal"
 
-    for shf in shf_values:
-        w = _w_tick(shf)
-        clipped = w > W_MAX          # geometrically above chart top
-        w_draw  = min(w, W_MAX)
-
-        is_maj  = shf in MAJOR
-        clr     = "#1a252f"
-        t_len   = 0.75 if is_maj else 0.5
-        lw_t    = 1.4  if is_maj else 0.9
-        fs      = 8.5  if is_maj else 7.5
-        fw      = "bold" if is_maj else "normal"
-
-        ax.plot([x_s, x_s + t_len], [w_draw, w_draw],
+        ax.plot([x_s, x_s + t_len], [w, w],
                 color=clr, lw=lw_t, clip_on=False, zorder=21)
-
-        lbl = ("▲ " if clipped else "") + f"{shf:.1f}"
-        ax.text(x_s + t_len + 0.3, w_draw, lbl,
+        ax.text(x_s + t_len + 0.3, w, f"{shf:.1f}",
                 fontsize=fs, color=clr, fontweight=fw,
                 ha="left", va="center", clip_on=False, zorder=22)
 
-    # SHF = 0  (pure latent: vertical process — tick at chart top)
-    ax.plot([x_s, x_s + 0.5], [W_MAX, W_MAX],
-            color="#1a252f", lw=0.9, clip_on=False, zorder=21)
-    ax.text(x_s + 0.8, W_MAX, "0  (latent)",
-            fontsize=7, color="#1a252f",
-            ha="left", va="center", clip_on=False, zorder=22)
+    # ── cap: upward arrow + list of hidden (high-latent) SHF values ──────────
+    if hidden:
+        hidden_str = ", ".join(f"{s:.1f}" for s in hidden) + " →↑"
+        ax.annotate(
+            "",
+            xy   =(x_s, w_bar_top + 0.0010),
+            xytext=(x_s, w_bar_top - 0.0005),
+            arrowprops=dict(arrowstyle="-|>", color="#2c3e50",
+                            lw=1.2, mutation_scale=10),
+            clip_on=False, zorder=22,
+        )
+        ax.text(x_s + 0.4, w_bar_top + 0.0012, hidden_str,
+                fontsize=6.5, color="#5d6d7e", style="italic",
+                ha="left", va="bottom", clip_on=False, zorder=22)
 
     # ── horizontal reference: alignment circle → SHF = 1.0 ───────────────────
     ax.plot([_T_REF, x_s], [_W_REF, _W_REF],
             color="#aab4be", lw=0.9, ls="--", clip_on=False, zorder=8)
 
-    # ── title ─────────────────────────────────────────────────────────────────
-    ax.text(x_s + 0.3, W_MAX + 0.0018, "SHF",
+    # ── title block: positioned well above the scale bar top ─────────────────
+    title_y    = w_bar_top + 0.0045
+    subtitle_y = w_bar_top + 0.0030
+    ax.text(x_s + 0.3, title_y, "SHF",
             fontsize=10, color="#1a252f", fontweight="bold",
             ha="left", va="bottom", clip_on=False, zorder=22)
-    ax.text(x_s + 0.3, W_MAX + 0.0008,
-            "Sensible Heat / Total Heat",
+    ax.text(x_s + 0.3, subtitle_y, "Sensible Heat / Total Heat",
             fontsize=5.5, color="#5d6d7e",
             ha="left", va="bottom", clip_on=False, zorder=22)
 
@@ -334,7 +341,7 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
               framealpha=0.85, edgecolor="#bdc3c7")
 
     # Right margin leaves room for the SHF scale drawn with clip_on=False
-    fig.subplots_adjust(left=0.08, right=0.78, bottom=0.09, top=0.93)
+    fig.subplots_adjust(left=0.08, right=0.74, bottom=0.09, top=0.93)
 
     # ── SHF vertical scale + alignment circle ──────────────────────────────────
     _draw_shf_protractor(fig, ax)
