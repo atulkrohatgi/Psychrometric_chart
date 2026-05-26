@@ -257,17 +257,6 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             w_plot    = min(st["W"], w_sat_val)
             ax.plot(st["DBT"], w_plot, "o", color=col, ms=9,
                     zorder=6, markeredgecolor="white", markeredgewidth=1.2)
-            ax.annotate(
-                st.get("label", f"State {i+1}"),
-                xy=(st["DBT"], w_plot),
-                xytext=(ox, oy), textcoords="offset points",
-                fontsize=9, color=col, fontweight="bold",
-                arrowprops=dict(arrowstyle="-", color=col, lw=0.8,
-                                shrinkA=0, shrinkB=4),
-                bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.92,
-                          ec=col, lw=1.2),
-                zorder=7,
-            )
 
     # ── process arrows ────────────────────────────────────────────────────────
     # Pre-compute axes geometry for pixel-accurate perpendicular label offsets
