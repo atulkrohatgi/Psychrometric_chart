@@ -247,16 +247,19 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
 
     # ── state points ──────────────────────────────────────────────────────────
     point_colors = ["#e74c3c", "#2980b9", "#27ae60", "#e67e22", "#8e44ad", "#16a085"]
-    label_offsets = [(14, 12), (-14, -18), (14, -18), (-14, 12)]
+    label_offsets = [(38, 14), (-38, -18), (38, -18), (-38, 14)]
     if states:
         for i, st in enumerate(states):
-            col = point_colors[i % len(point_colors)]
+            col  = point_colors[i % len(point_colors)]
             ox, oy = label_offsets[i % len(label_offsets)]
-            ax.plot(st["DBT"], st["W"], "o", color=col, ms=9,
+            # Fix 1: clamp W to saturation curve — no point can plot above it
+            w_sat_val = _w_sat(st["DBT"]) or W_MAX
+            w_plot    = min(st["W"], w_sat_val)
+            ax.plot(st["DBT"], w_plot, "o", color=col, ms=9,
                     zorder=6, markeredgecolor="white", markeredgewidth=1.2)
             ax.annotate(
                 st.get("label", f"State {i+1}"),
-                xy=(st["DBT"], st["W"]),
+                xy=(st["DBT"], w_plot),
                 xytext=(ox, oy), textcoords="offset points",
                 fontsize=9, color=col, fontweight="bold",
                 arrowprops=dict(arrowstyle="-", color=col, lw=0.8,
@@ -267,33 +270,72 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
             )
 
     # ── process arrows ────────────────────────────────────────────────────────
+    # Pre-compute axes geometry for pixel-accurate perpendicular label offsets
+    fig_w, fig_h   = fig.get_size_inches()
+    ax_pos         = ax.get_position()
+    plot_w_pts     = ax_pos.width  * fig_w * 72   # axes width  in pts
+    plot_h_pts     = ax_pos.height * fig_h * 72   # axes height in pts
+    x_data_range   = ax.get_xlim()[1] - ax.get_xlim()[0]
+    w_data_range   = ax.get_ylim()[1] - ax.get_ylim()[0]
+    LABEL_OFFSET_PTS = 32          # perpendicular distance from line to label
+
+    def _proc_label(mid_t, mid_w, dx, dw, label):
+        """Place a process label perpendicular to the line, always above it."""
+        # Convert direction to display (pts) space
+        dx_pts = dx / x_data_range * plot_w_pts
+        dw_pts = dw / w_data_range * plot_h_pts
+        len_pts = (dx_pts**2 + dw_pts**2) ** 0.5 or 1.0
+        # 90° counter-clockwise perpendicular
+        ox =  -dw_pts / len_pts * LABEL_OFFSET_PTS
+        oy =   dx_pts / len_pts * LABEL_OFFSET_PTS
+        # Ensure label sits above the line (positive display-y = upward)
+        if oy < 0:
+            ox, oy = -ox, -oy
+        ax.annotate(
+            label,
+            xy=(mid_t, mid_w),
+            xytext=(ox, oy), textcoords="offset points",
+            fontsize=8, color="#2c3e50", fontweight="bold",
+            ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#fef9e7",
+                      alpha=0.92, ec="#f39c12", lw=1.2),
+            zorder=8,
+        )
+
+    def _arrow(x1, y1, x2, y2, col="#2c3e50", lw=2.0):
+        ax.annotate("",
+            xy=(x2, y2), xytext=(x1, y1),
+            arrowprops=dict(arrowstyle="-|>", color=col,
+                            lw=lw, mutation_scale=18),
+            zorder=5)
+
     if process_pairs:
-        for s_from, s_to, label in process_pairs:
-            ax.annotate(
-                "",
-                xy=(s_to["DBT"], s_to["W"]),
-                xytext=(s_from["DBT"], s_from["W"]),
-                arrowprops=dict(arrowstyle="-|>", color="#2c3e50",
-                                lw=2.0, mutation_scale=18),
-                zorder=5,
-            )
-            mid_t = (s_from["DBT"] + s_to["DBT"]) / 2
-            mid_w = (s_from["W"]   + s_to["W"])   / 2
-            dx = s_to["DBT"] - s_from["DBT"]
-            dw = s_to["W"]   - s_from["W"]
-            length = (dx**2 + dw**2) ** 0.5 or 1e-6
-            perp_t  =  dw / length * 1.5
-            perp_w  = -dx / length * 0.002
-            if perp_w < 0:
-                perp_t, perp_w = -perp_t, -perp_w
-            ax.text(
-                mid_t + perp_t, mid_w + perp_w, label,
-                fontsize=8, color="#2c3e50", fontweight="bold",
-                ha="center", va="bottom",
-                bbox=dict(boxstyle="round,pad=0.3", fc="#fef9e7",
-                          alpha=0.92, ec="#f39c12", lw=1.2),
-                zorder=8,
-            )
+        for item in process_pairs:
+            s_from, s_to, label = item[0], item[1], item[2]
+
+            # Fix 1: clamp endpoints to saturation
+            w_sat_from = _w_sat(s_from["DBT"]) or W_MAX
+            w_sat_to   = _w_sat(s_to["DBT"])   or W_MAX
+            t1, w1 = s_from["DBT"], min(s_from["W"], w_sat_from)
+            t2, w2 = s_to["DBT"],   min(s_to["W"],   w_sat_to)
+
+            # Fix 2: Heating & Humidification → two distinct sub-arrows
+            if "Heating" in label and "Humidif" in label:
+                # Step A — sensible heating: horizontal at constant W
+                t_mid = t2;  w_mid = w1
+                _arrow(t1, w1, t_mid, w_mid, col="#c0392b")   # red → heating
+                _arrow(t_mid, w_mid, t2, w2,  col="#2980b9")   # blue → humidification
+                # Label on the humidification segment (vertical leg)
+                _proc_label(
+                    (t_mid + t2) / 2, (w_mid + w2) / 2,
+                    t2 - t_mid, w2 - w_mid, label
+                )
+            else:
+                # Normal single arrow
+                _arrow(t1, w1, t2, w2)
+                dx = t2 - t1
+                dw = w2 - w1
+                _proc_label((t1 + t2) / 2, (w1 + w2) / 2, dx, dw, label)
 
     # ── axes & legend ─────────────────────────────────────────────────────────
     ax.set_xlim(DBT_MIN - 1, DBT_MAX + 2)
@@ -323,7 +365,7 @@ def draw_psychro_chart(states=None, process_pairs=None, title="Psychrometric Cha
     # Secondary y-axis in g/kg
     ax2 = ax.twinx()
     ax2.set_ylim(W_MIN * 1000, (W_MAX + 0.001) * 1000)
-    ax2.set_ylabel("Humidity Ratio  (g/kg dry air)", fontsize=10, labelpad=8)
+    ax2.set_ylabel("Humidity Ratio  (g/kg dry air)", fontsize=10, labelpad=70)
     ax2.yaxis.set_major_locator(MultipleLocator(5))
     ax2.yaxis.set_minor_locator(MultipleLocator(1))
     ax2.tick_params(which="major", labelsize=8, length=5, width=0.8)
